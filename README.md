@@ -1,1 +1,1 @@
-# meeting-notes-agent
+# crewai-agent
