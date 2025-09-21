@@ -145,6 +145,15 @@ python -m cli --mode coding --code-file /path/to/script.py
 - **Meeting Notes Scribe**: Processes meeting inputs into structured, actionable notes
 - **Code Review Assistant**: Analyzes code for issues and provides improvement suggestions
 
+### Additional Components
+- **Nanda Provider (`digital_twin_nanda.py`)**: Exposes the meeting agent through the NANDA server so the digital twin can answer inbound messages; set the Anthropic credentials plus `DOMAIN_NAME`, optional TLS paths, and run the script to launch the provider.
+
+### Agent + Adapter Overview
+The agent turns meeting inputs into a short, first-person reply that sounds like the student. It adds clear next steps and keeps the tone consistent. It can read prior conversation turns to stay aligned with context. We expose the agent through the NANDA provider by running `digital_twin_nanda.py`. The script serves an HTTP endpoint. It accepts a message and optional history and returns a reply.
+
+### Adapter Feedback
+Some README instructions are confusing. The environment variables are listed in different places, and TLS setup is not grouped. The difference between localhost and domain modes is easy to miss. I also had trouble seeing the agent on the website. Aditionally, a curl example and a basic health endpoint would make verification easier. 
+
 ### Tools Available
 - **URL Reader**: Fetches and extracts text from web pages
 - **PDF Reader**: Extracts text from local PDF files
