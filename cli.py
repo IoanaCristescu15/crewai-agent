@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import platform
+import subprocess
 from pathlib import Path
 from typing import List
 
@@ -88,6 +90,16 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         "--keep-recordings",
         action="store_true",
         help="Keep temporary microphone recordings instead of deleting them after processing.",
+    )
+    parser.add_argument(
+        "--tts-direct",
+        action="store_true",
+        help="Speak responses directly via TTS engine (no file I/O).",
+    )
+    parser.add_argument(
+        "--accumulate-context",
+        action="store_true",
+        help="Accumulate prior transcripts and pass full context to the summarizer each turn.",
     )
     
     return parser.parse_args(argv)
@@ -216,6 +228,7 @@ def run_meeting_voice_session(agent, args, voice_io: VoiceIO) -> None:
     """Interactive loop that records speech, summarizes it, and plays audio responses."""
     print("Voice session ready.")
     print("Say your meeting notes after the prompt. Say 'exit' to leave.\n")
+    conversation: list[str] = []
 
     while True:
         try:
@@ -247,20 +260,37 @@ def run_meeting_voice_session(agent, args, voice_io: VoiceIO) -> None:
         print("\nTranscription:")
         print(transcript_text)
 
-        summary = summarize_single(agent, transcript_text, display=False)
+        if args.accumulate_context:
+            conversation.append(transcript_text)
+            full_context = "\n\n".join(conversation)
+            summary = summarize_single(agent, full_context, display=False)
+        else:
+            summary = summarize_single(agent, transcript_text, display=False)
         print("\nAgent response:")
         print(summary)
 
         response_path: Path | None = None
         try:
-            response_path = voice_io.synthesize_speech(
-                summary,
-                Path(args.response_audio) if args.response_audio else None,
-            )
+            # Always speak directly when not saving to a file, or when --tts-direct is set
+            if args.tts_direct or not args.response_audio:
+                voice_io.speak(summary)
+
+            # If saving to a file, also synthesize and optionally play
             if args.response_audio:
-                response_path = Path(args.response_audio)
-            if not args.no_playback:
-                voice_io.play_audio(response_path)
+                response_path = voice_io.synthesize_speech(
+                    summary, Path(args.response_audio)
+                )
+                if not args.no_playback and response_path:
+                    try:
+                        voice_io.play_audio(response_path)
+                    except Exception as play_exc:
+                        if platform.system().lower() == "darwin":
+                            try:
+                                subprocess.run(["afplay", str(response_path)], check=False)
+                            except Exception:
+                                print(f"Playback failed: {play_exc}", file=sys.stderr)
+                        else:
+                            print(f"Playback failed: {play_exc}", file=sys.stderr)
         except ImportError as exc:
             print(f"Missing dependency for TTS: {exc}", file=sys.stderr)
         except RuntimeError as exc:
@@ -283,6 +313,10 @@ def run_meeting_voice_session(agent, args, voice_io: VoiceIO) -> None:
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     ensure_api_key()
+
+    # Ensure plain voice mode always speaks every turn by default
+    if args.voice and not args.response_audio and not getattr(args, "tts_direct", False):
+        args.tts_direct = True
 
     voice_io: VoiceIO | None = None
     if args.voice or args.input_audio:

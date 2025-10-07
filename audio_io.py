@@ -104,6 +104,23 @@ class VoiceIO:
         engine.runAndWait()
         return path
 
+    def speak(self, text: str) -> None:
+        """Speak text directly via the TTS engine (no file I/O)."""
+        if not isinstance(text, str) or not text.strip():
+            return
+        engine = self._get_tts_engine()
+        # Apply optional voice/rate if provided
+        if self.tts_voice:
+            with contextlib.suppress(Exception):
+                engine.setProperty("voice", self.tts_voice)
+        if self.tts_rate:
+            with contextlib.suppress(Exception):
+                engine.setProperty("rate", self.tts_rate)
+        with contextlib.suppress(Exception):
+            engine.stop()
+        engine.say(text)
+        engine.runAndWait()
+
     def play_audio(self, audio_path: str | Path) -> None:
         """Play an audio file through the default output device."""
         sounddevice = self._lazy_import_sounddevice()
