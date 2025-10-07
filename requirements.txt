@@ -3,4 +3,8 @@ requests>=2.31.0
 trafilatura>=1.6.3
 pypdf>=4.2.0
 reportlab
-
+numpy>=1.24
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pyttsx3>=2.90
+openai-whisper>=20231117

@@ -108,6 +108,24 @@ python -m cli --mode meeting --text "raw notes here"
 python -m cli --mode meeting --weekly --url https://a --pdf /path/to/b.pdf --text "snippet"
 ```
 
+### Voice Mode (Speech I/O)
+```bash
+# Interactive recording loop: speak meeting notes, hear the TL;DR back
+python -m cli --mode meeting --voice
+
+# Transcribe an existing audio file and summarize it
+python -m cli --mode meeting --input-audio /path/to/notes.wav
+
+# Save synthesized audio and reuse a specific TTS voice/rate
+python -m cli --mode meeting --voice --response-audio reply.wav --tts-voice "com.apple.speech.synthesis.voice.samantha"
+```
+
+- Whisper STT model defaults to `base`; override with `--stt-model small`.
+- `--no-playback` skips immediate audio playback (helpful on remote servers).
+- Use `--keep-recordings` to retain temporary microphone captures.
+
+> **System packages:** Speech features need PortAudio. On macOS: `brew install portaudio`. On Debian/Ubuntu: `sudo apt-get install portaudio19-dev`.
+
 ### Coding Mode
 ```bash
 # Analyze code directly

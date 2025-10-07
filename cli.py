@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import List
 
 from crewai import Crew, Task
@@ -12,6 +13,7 @@ from agent import (
     create_meeting_tasks, create_coding_tasks
 )
 from tools import UrlReaderTool, PdfReaderTool, PasteTool
+from audio_io import VoiceIO
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -40,6 +42,53 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     # Coding mode arguments
     parser.add_argument("--code", type=str, help="Code to analyze for coding mode", default=None)
     parser.add_argument("--code-file", type=str, help="File containing code to analyze", default=None)
+    
+    # Voice mode arguments
+    parser.add_argument(
+        "--voice",
+        action="store_true",
+        help="Enable interactive voice loop (records speech, runs the agent, plays audio response).",
+    )
+    parser.add_argument(
+        "--input-audio",
+        type=str,
+        help="Path to a pre-recorded audio file; will be transcribed and used as text input.",
+        default=None,
+    )
+    parser.add_argument(
+        "--response-audio",
+        type=str,
+        help="Optional path to save synthesized agent responses when using voice features.",
+        default=None,
+    )
+    parser.add_argument(
+        "--stt-model",
+        type=str,
+        default="base",
+        help="Whisper model name/path to load for speech-to-text (default: base).",
+    )
+    parser.add_argument(
+        "--tts-voice",
+        type=str,
+        help="Optional pyttsx3 voice identifier to use for text-to-speech.",
+        default=None,
+    )
+    parser.add_argument(
+        "--tts-rate",
+        type=int,
+        help="Optional speech rate override for text-to-speech (pyttsx3).",
+        default=None,
+    )
+    parser.add_argument(
+        "--no-playback",
+        action="store_true",
+        help="Skip audio playback when synthesizing responses (useful on headless systems).",
+    )
+    parser.add_argument(
+        "--keep-recordings",
+        action="store_true",
+        help="Keep temporary microphone recordings instead of deleting them after processing.",
+    )
     
     return parser.parse_args(argv)
 
@@ -112,7 +161,7 @@ def gather_sources(args: argparse.Namespace) -> List[str]:
     return [s for s in sources if s]
 
 
-def summarize_single(agent, source_text: str):
+def summarize_single(agent, source_text: str, *, display: bool = True) -> str:
     # Include the source text in the description instead of using context
     task = Task(
         description=(
@@ -129,13 +178,16 @@ def summarize_single(agent, source_text: str):
     )
     crew = Crew(agents=[agent], tasks=[task])
     result = crew.kickoff()
-    print(result)
+    text_result = str(result)
+    if display:
+        print(text_result)
+    return text_result
 
 
-def weekly_rollup(agent, sources: List[str]):
+def weekly_rollup(agent, sources: List[str], *, display: bool = True) -> str | None:
     if len(sources) < 2:
         print("Hint: --weekly needs at least two sources (mix of --url/--pdf/--text).")
-        return
+        return None
     
     # Combine all sources into the description
     sources_text = "\n\n".join([f"SOURCE {i+1}:\n{source}" for i, source in enumerate(sources)])
@@ -154,15 +206,98 @@ def weekly_rollup(agent, sources: List[str]):
     )
     crew = Crew(agents=[agent], tasks=[task])
     result = crew.kickoff()
-    print(result)
+    text_result = str(result)
+    if display:
+        print(text_result)
+    return text_result
+
+
+def run_meeting_voice_session(agent, args, voice_io: VoiceIO) -> None:
+    """Interactive loop that records speech, summarizes it, and plays audio responses."""
+    print("Voice session ready.")
+    print("Say your meeting notes after the prompt. Say 'exit' to leave.\n")
+
+    while True:
+        try:
+            transcript, audio_path = voice_io.capture_and_transcribe()
+        except ImportError as exc:
+            print(f"Missing dependency: {exc}", file=sys.stderr)
+            return
+        except RuntimeError as exc:
+            print(f"Recorder error: {exc}", file=sys.stderr)
+            continue
+
+        transcript_text = transcript.strip()
+        input_audio_path = Path(audio_path)
+
+        if not transcript_text:
+            print("No speech detected. Please try again.")
+            if not args.keep_recordings:
+                input_audio_path.unlink(missing_ok=True)
+            continue
+
+        if transcript_text.lower() in {"exit", "quit", "stop"}:
+            print("Ending voice session.")
+            if not args.keep_recordings:
+                input_audio_path.unlink(missing_ok=True)
+            else:
+                print(f"[saved] Input audio: {input_audio_path}")
+            break
+
+        print("\nTranscription:")
+        print(transcript_text)
+
+        summary = summarize_single(agent, transcript_text, display=False)
+        print("\nAgent response:")
+        print(summary)
+
+        response_path: Path | None = None
+        try:
+            response_path = voice_io.synthesize_speech(
+                summary,
+                Path(args.response_audio) if args.response_audio else None,
+            )
+            if args.response_audio:
+                response_path = Path(args.response_audio)
+            if not args.no_playback:
+                voice_io.play_audio(response_path)
+        except ImportError as exc:
+            print(f"Missing dependency for TTS: {exc}", file=sys.stderr)
+        except RuntimeError as exc:
+            print(f"TTS error: {exc}", file=sys.stderr)
+
+        if args.keep_recordings:
+            print(f"[saved] Input audio: {input_audio_path}")
+            if response_path:
+                print(f"[saved] Response audio: {response_path}")
+        else:
+            input_audio_path.unlink(missing_ok=True)
+            if response_path and not args.response_audio:
+                response_path.unlink(missing_ok=True)
+            elif response_path:
+                print(f"[saved] Response audio: {response_path}")
+
+        print("\n---\n")
 
 
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     ensure_api_key()
 
+    voice_io: VoiceIO | None = None
+    if args.voice or args.input_audio:
+        voice_io = VoiceIO(
+            stt_model_name=args.stt_model,
+            tts_voice=args.tts_voice,
+            tts_rate=args.tts_rate,
+        )
+
     # Handle different modes
     if args.mode == "coding":
+        if args.voice or args.input_audio:
+            print("Voice features are currently available for meeting mode only.", file=sys.stderr)
+            return 1
+
         code = None
         if args.code:
             code = args.code
@@ -184,6 +319,35 @@ def main(argv: List[str] | None = None) -> int:
     elif args.mode == "meeting":
         # Original meeting notes functionality
         agent = build_meeting_agent()
+
+        if args.voice:
+            if voice_io is None:
+                voice_io = VoiceIO(
+                    stt_model_name=args.stt_model,
+                    tts_voice=args.tts_voice,
+                    tts_rate=args.tts_rate,
+                )
+            run_meeting_voice_session(agent, args, voice_io)
+            return 0
+
+        if args.input_audio:
+            assert voice_io is not None  # For type-checkers; instantiated above.
+            try:
+                transcript = voice_io.transcribe_file(args.input_audio)
+            except ImportError as exc:
+                print(f"Missing dependency for transcription: {exc}", file=sys.stderr)
+                return 4
+            except RuntimeError as exc:
+                print(f"Transcription error: {exc}", file=sys.stderr)
+                return 4
+
+            if not transcript.strip():
+                print("Error: Transcription produced empty text.", file=sys.stderr)
+                return 5
+
+            print("Transcribed audio input:")
+            print(transcript)
+            args.text = transcript
 
         if not args.url and not args.pdf and not args.text:
             # No source: run intro and print template
@@ -218,5 +382,3 @@ def main(argv: List[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
